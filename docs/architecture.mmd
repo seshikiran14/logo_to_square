@@ -1,0 +1,27 @@
+flowchart TD
+    A["Input Source\nSingle file (--in_path)\nBatch directory (--in_dir)"] --> B["CLI/API Layer\ncli() / process_images() / squareify()"]
+    B --> C{"Mode"}
+    C -->|Single| D["Resolve output name/path"]
+    C -->|Batch| E["Discover files\nrecursive/include/exclude"]
+
+    E --> F{"dry_run?"}
+    F -->|Yes| G["Plan only\noptional JSON/CSV report"]
+    F -->|No| H["Convert each file"]
+    D --> H
+
+    H --> I["Preset Resolution\napp-icon / marketplace / social\nor explicit args"]
+    I --> J["Load image + validate"]
+    J --> K{"Transparency?"}
+
+    K -->|Yes| L["Transparent branch\nchoose fill color\n(auto or override)"]
+    K -->|No| M["Opaque branch\nsample background\n(auto or override)"]
+
+    L --> N{"fit mode"}
+    M --> N
+    N -->|contain| O["Resize + center on square canvas\napply padding margin"]
+    N -->|cover| P["Scale + crop center to square"]
+
+    O --> Q["Save output\nformat/quality handling"]
+    P --> Q
+    Q --> R["Output Assets\nsquare images"]
+    R --> S["Optional Report\nconverted/skipped/error"]

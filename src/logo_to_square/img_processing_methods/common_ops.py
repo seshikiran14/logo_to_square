@@ -1,20 +1,20 @@
 from PIL import Image
 
-def resize_method(img, target_size): #resizes the image by maintaing the aspect ratio
-    width,height=img.size
-    if width == height:
+
+def resize_method(img, target_size):
+    """Resize image so its longest side matches target_size."""
+    width, height = img.size
+    if width == height == target_size:
         return img
-    
-    elif  height > width :
-            width=int((width/height) *target_size)
-            height = target_size
-            img=img.resize((width,height),Image.BILINEAR)
-            return img
+
+    if width >= height:
+        new_width = int(target_size)
+        new_height = max(1, int((height / width) * target_size))
     else:
-            height=int((height/width) *target_size)
-            width =target_size
-            img =img.resize((width,height),Image.BILINEAR)
-    return img
+        new_height = int(target_size)
+        new_width = max(1, int((width / height) * target_size))
+
+    return img.resize((new_width, new_height), Image.Resampling.LANCZOS)
 
 
 
