@@ -16,7 +16,11 @@ It supports multiple input/output formats, smart background handling, compositio
 Architecture Diagram
 ====================
 
-See the Mermaid architecture flow here:
+.. image:: docs/_static/architecture.png
+   :alt: Architecture flow diagram for logo_to_square
+   :width: 760
+
+Source Mermaid file:
 ``docs/architecture.mmd``
 
 You can view/edit it in Mermaid Live:
@@ -27,7 +31,7 @@ Before/After Showcase
 
 Input example:
 
-.. image:: docs/_static/showcase/before.jpg
+.. image:: docs/_static/showcase/before.png
    :alt: Sample input image before square conversion
    :width: 320
 
