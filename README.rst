@@ -37,7 +37,7 @@ Input example:
 
 Square output:
 
-.. image:: docs/_static/showcase/after_square.png
+.. image:: docs/_static/showcase/after_square.webp
    :alt: Square output image after conversion
    :width: 320
 
@@ -95,6 +95,7 @@ Useful options:
 - ``--background``: ``auto``, ``black``, ``white``, or ``#RRGGBB``
 - ``--fit``: ``contain`` (default) or ``cover``
 - ``--padding``: safe margin ratio, e.g. ``0.08``
+- ``--no_upscale``: keep small source logos at native resolution to avoid blur
 - ``--dry_run`` and ``--report_path report.json|report.csv`` for batch previews/reports
 
 Preset defaults:

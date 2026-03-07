@@ -1,11 +1,13 @@
 from PIL import Image
 
 
-def resize_method(img, target_size):
+def resize_method(img, target_size, *, allow_upscale=True):
     """Resize image so its longest side matches target_size."""
     width, height = img.size
     if width == height == target_size:
         return img
+    if not allow_upscale and max(width, height) <= target_size:
+        return img.copy()
 
     if width >= height:
         new_width = int(target_size)

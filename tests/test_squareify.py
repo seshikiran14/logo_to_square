@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from logo_to_square.square_img_using_PIL import cli, main, process_images, squareify
@@ -14,6 +15,22 @@ def _create_transparent_image(path: Path, size=(120, 80)) -> None:
     for x in range(30, 90):
         for y in range(20, 60):
             image.putpixel((x, y), (255, 0, 0, 255))
+    image.save(path)
+
+
+def _create_transparent_white_logo(path: Path, size=(120, 80)) -> None:
+    image = Image.new("RGBA", size, (0, 0, 0, 0))
+    for x in range(30, 90):
+        for y in range(20, 60):
+            image.putpixel((x, y), (255, 255, 255, 255))
+    image.save(path)
+
+
+def _create_transparent_black_logo(path: Path, size=(120, 80)) -> None:
+    image = Image.new("RGBA", size, (0, 0, 0, 0))
+    for x in range(30, 90):
+        for y in range(20, 60):
+            image.putpixel((x, y), (0, 0, 0, 255))
     image.save(path)
 
 
@@ -39,6 +56,44 @@ def test_squareify_respects_background_override_for_transparent_image(tmp_path):
     assert out_file.exists()
     with Image.open(out_file) as out_image:
         assert out_image.size == (96, 96)
+        rgb_image = out_image.convert("RGB")
+        assert rgb_image.getpixel((0, 0)) == (255, 255, 255)
+
+
+def test_squareify_handles_fully_transparent_input_with_auto_background(tmp_path):
+    source = tmp_path / "fully_transparent.png"
+    output_dir = tmp_path / "out"
+    Image.new("RGBA", (80, 40), (0, 0, 0, 0)).save(source)
+
+    out_file = squareify(source, 120, output_dir, "fully_transparent", background="auto")
+
+    assert out_file.exists()
+    with Image.open(out_file) as out_image:
+        assert out_image.size == (120, 120)
+
+
+def test_squareify_auto_background_uses_contrast_for_white_foreground(tmp_path):
+    source = tmp_path / "transparent_white_logo.png"
+    output_dir = tmp_path / "out"
+    _create_transparent_white_logo(source)
+
+    out_file = squareify(source, 120, output_dir, "white_logo_auto_bg", background="auto")
+
+    with Image.open(out_file) as out_image:
+        assert out_image.size == (120, 120)
+        rgb_image = out_image.convert("RGB")
+        assert rgb_image.getpixel((0, 0)) == (0, 0, 0)
+
+
+def test_squareify_auto_background_uses_contrast_for_black_foreground(tmp_path):
+    source = tmp_path / "transparent_black_logo.png"
+    output_dir = tmp_path / "out"
+    _create_transparent_black_logo(source)
+
+    out_file = squareify(source, 120, output_dir, "black_logo_auto_bg", background="auto")
+
+    with Image.open(out_file) as out_image:
+        assert out_image.size == (120, 120)
         rgb_image = out_image.convert("RGB")
         assert rgb_image.getpixel((0, 0)) == (255, 255, 255)
 
@@ -95,6 +150,31 @@ def test_squareify_cover_mode(tmp_path):
 
     with Image.open(out_file) as out_image:
         assert out_image.size == (100, 100)
+
+
+def test_squareify_no_upscale_keeps_small_logo_size(tmp_path):
+    source = tmp_path / "small_logo.png"
+    output_dir = tmp_path / "out"
+    Image.new("RGB", (20, 10), (10, 20, 30)).save(source)
+
+    out_file = squareify(
+        source,
+        100,
+        output_dir,
+        "small_logo",
+        output_format="png",
+        background="#ffffff",
+        upscale=False,
+    )
+
+    with Image.open(out_file) as out_image:
+        assert out_image.size == (100, 100)
+        bbox = out_image.convert("RGB").point(lambda px: 0 if px == 255 else 255).getbbox()
+        assert bbox is not None
+        width = bbox[2] - bbox[0]
+        height = bbox[3] - bbox[1]
+        assert width == 20
+        assert height == 10
 
 
 def test_squareify_preset_app_icon(tmp_path):
@@ -181,3 +261,58 @@ def test_main_legacy_signature_still_works(tmp_path):
 
     out_file = output_dir / "legacy_name_square.webp"
     assert out_file.exists()
+
+
+def test_squareify_invalid_background_raises_value_error(tmp_path):
+    source = tmp_path / "opaque.png"
+    output_dir = tmp_path / "out"
+    _create_opaque_image(source)
+
+    with pytest.raises(ValueError, match="background must be one of"):
+        squareify(source, 128, output_dir, "opaque_bad_bg", background="pink")
+
+
+def test_squareify_missing_input_raises_file_not_found(tmp_path):
+    output_dir = tmp_path / "out"
+
+    with pytest.raises(FileNotFoundError, match="Input image not found"):
+        squareify(tmp_path / "missing.png", 128, output_dir, "missing")
+
+
+def test_squareify_invalid_upscale_flag_raises_value_error(tmp_path):
+    source = tmp_path / "opaque.png"
+    output_dir = tmp_path / "out"
+    _create_opaque_image(source)
+
+    with pytest.raises(ValueError, match="upscale must be a boolean value"):
+        squareify(source, 128, output_dir, "bad_upscale", upscale="no")
+
+
+def test_squareify_invalid_output_format_raises_value_error(tmp_path):
+    source = tmp_path / "opaque.png"
+    output_dir = tmp_path / "out"
+    _create_opaque_image(source)
+
+    with pytest.raises(ValueError, match="Unsupported output format"):
+        squareify(source, 128, output_dir, "bad_format", output_format="svg")
+
+
+def test_process_images_invalid_report_extension_raises_value_error(tmp_path):
+    source = tmp_path / "opaque.png"
+    output_dir = tmp_path / "out"
+    report = tmp_path / "report.txt"
+    _create_opaque_image(source)
+
+    with pytest.raises(ValueError, match="report_path must end with"):
+        process_images(
+            in_img_path=str(source),
+            in_dir=None,
+            target_size=80,
+            out_img_path=str(output_dir),
+            filename="opaque",
+            output_format="webp",
+            quality=90,
+            background="auto",
+            overwrite=False,
+            report_path=str(report),
+        )

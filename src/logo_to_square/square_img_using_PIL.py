@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from logo_to_square.img_processing_methods.common_ops import resize_method
 from logo_to_square.img_processing_methods.getdominantcolor import ColorThief
@@ -26,6 +26,8 @@ SUPPORTED_EXTS = {
     ".ico",
     ".ppm",
 }
+SUPPORTED_FORMATS = {ext.lstrip(".") for ext in SUPPORTED_EXTS}
+SUPPORTED_FORMATS.add("jpg")
 PRESETS: Dict[str, Dict[str, Union[str, int, float]]] = {
     "app-icon": {
         "target_size": 512,
@@ -77,13 +79,57 @@ def _normalize_format(output_format: str) -> str:
     return "jpeg" if value == "jpg" else value
 
 
+def _validate_output_format(output_format: str) -> str:
+    normalized = _normalize_format(output_format)
+    if normalized not in SUPPORTED_FORMATS:
+        allowed = ", ".join(sorted(SUPPORTED_FORMATS))
+        raise ValueError(f"Unsupported output format '{output_format}'. Choose from: {allowed}")
+    return normalized
+
+
 def _pil_format(output_format: str) -> str:
     mapping = {"jpeg": "JPEG", "tif": "TIFF"}
     return mapping.get(output_format.lower(), output_format.upper())
 
 
-def _choose_transparent_fill(img_path: Path, quality: int) -> RGBColor:
-    dominant_color = ColorThief(str(img_path)).get_color(quality=quality)
+def _infer_foreground_color(img: Image.Image) -> Optional[RGBColor]:
+    rgba = img.convert("RGBA")
+    if max(rgba.size) > 512:
+        rgba.thumbnail((512, 512), Image.Resampling.BILINEAR)
+    totals = [0.0, 0.0, 0.0]
+    alpha_total = 0.0
+    # Sample pixels for speed while keeping representative foreground color.
+    for idx, (red, green, blue, alpha) in enumerate(rgba.getdata()):
+        if idx % 4 != 0:
+            continue
+        if alpha < 24:
+            continue
+        weight = alpha / 255.0
+        totals[0] += red * weight
+        totals[1] += green * weight
+        totals[2] += blue * weight
+        alpha_total += weight
+
+    if alpha_total <= 0:
+        return None
+    return (
+        int(totals[0] / alpha_total),
+        int(totals[1] / alpha_total),
+        int(totals[2] / alpha_total),
+    )
+
+
+def _choose_transparent_fill(img: Image.Image, img_path: Path, quality: int) -> RGBColor:
+    inferred_foreground = _infer_foreground_color(img)
+    if inferred_foreground is not None:
+        return (0, 0, 0) if _relative_luminance(inferred_foreground) > 150 else (255, 255, 255)
+
+    try:
+        dominant_color = ColorThief(str(img_path)).get_color(quality=quality)
+    except Exception:
+        # Fall back to white for edge cases such as fully transparent images
+        # where dominant color extraction cannot infer a stable palette.
+        return (255, 255, 255)
     return (0, 0, 0) if _relative_luminance(dominant_color) > 150 else (255, 255, 255)
 
 
@@ -104,9 +150,10 @@ def _resolve_preset(
     fit: str,
     padding: float,
 ) -> Tuple[int, str, int, str, float]:
+    normalized_output = _validate_output_format(output_format)
     if preset is None:
         resolved_size = int(target_size) if target_size is not None else 200
-        return resolved_size, _normalize_format(output_format), int(quality), fit, float(padding)
+        return resolved_size, normalized_output, int(quality), fit, float(padding)
 
     if preset not in PRESETS:
         raise ValueError(f"Unknown preset '{preset}'. Choose from: {', '.join(sorted(PRESETS))}")
@@ -115,8 +162,8 @@ def _resolve_preset(
     resolved_size = int(values["target_size"]) if target_size is None else int(target_size)
     resolved_output = (
         _normalize_format(str(values["output_format"]))
-        if output_format == "webp"
-        else _normalize_format(output_format)
+        if normalized_output == "webp"
+        else normalized_output
     )
     resolved_quality = int(values["quality"]) if quality == 95 else int(quality)
     resolved_fit = str(values["fit"]) if fit == "contain" else fit
@@ -130,8 +177,9 @@ def _fit_contain_square(
     fit_size: int,
     background_color: RGBColor,
     use_alpha: bool,
+    allow_upscale: bool,
 ) -> Image.Image:
-    resized = resize_method(img, fit_size)
+    resized = resize_method(img, fit_size, allow_upscale=allow_upscale)
     canvas_mode = "RGBA" if use_alpha else "RGB"
     fill = (*background_color, 255) if use_alpha else background_color
     result = Image.new(canvas_mode, (target_size, target_size), fill)
@@ -162,6 +210,29 @@ def _fit_cover_square(img: Image.Image, target_size: int, use_alpha: bool) -> Im
     return cropped.convert("RGBA" if use_alpha else "RGB")
 
 
+def _build_save_kwargs(parsed_format: str, parsed_quality: int, use_alpha: bool) -> Dict[str, Any]:
+    save_kwargs: Dict[str, Any] = {}
+    if parsed_format == "jpeg":
+        save_kwargs.update(
+            {
+                "quality": parsed_quality,
+                "optimize": True,
+                "progressive": True,
+                "subsampling": 0,
+            }
+        )
+    elif parsed_format == "webp":
+        save_kwargs.update({"quality": parsed_quality, "method": 6})
+        if use_alpha:
+            save_kwargs["exact"] = True
+    elif parsed_format in {"png", "bmp", "tiff", "gif", "ico", "ppm"}:
+        if parsed_format == "png":
+            save_kwargs.update({"optimize": True, "compress_level": 6})
+    else:
+        save_kwargs["quality"] = parsed_quality
+    return save_kwargs
+
+
 def squareify(
     img_path: Union[str, Path],
     target_size: Optional[int],
@@ -174,6 +245,7 @@ def squareify(
     fit: str = "contain",
     padding: float = 0.0,
     preset: Optional[str] = None,
+    upscale: bool = True,
 ) -> Path:
     parsed_size, parsed_format, parsed_quality, parsed_fit, parsed_padding = _resolve_preset(
         preset=preset,
@@ -191,6 +263,8 @@ def squareify(
         raise ValueError("fit must be either 'contain' or 'cover'")
     if not 0.0 <= parsed_padding <= 0.45:
         raise ValueError("padding must be between 0.0 and 0.45")
+    if not isinstance(upscale, bool):
+        raise ValueError("upscale must be a boolean value")
 
     input_path = Path(img_path)
     if not input_path.exists():
@@ -201,14 +275,16 @@ def squareify(
 
     try:
         with Image.open(input_path) as src:
-            img = src.copy()
+            img = ImageOps.exif_transpose(src).copy()
             transparent_source = has_transparency(img)
 
             if transparent_source:
+                if img.mode != "RGBA":
+                    img = img.convert("RGBA")
                 fill_color = (
                     parsed_bg
                     if parsed_bg is not None
-                    else _choose_transparent_fill(input_path, quality=10)
+                    else _choose_transparent_fill(img, input_path, quality=10)
                 )
                 use_alpha = True
             else:
@@ -227,14 +303,13 @@ def squareify(
                     fit_size=fit_size,
                     background_color=fill_color,
                     use_alpha=use_alpha,
+                    allow_upscale=upscale,
                 )
 
             if parsed_format == "jpeg" and squared.mode != "RGB":
                 squared = squared.convert("RGB")
 
-            save_kwargs = {"quality": parsed_quality}
-            if parsed_format in {"png", "bmp", "tiff", "gif", "ico", "ppm"}:
-                save_kwargs.pop("quality", None)
+            save_kwargs = _build_save_kwargs(parsed_format, parsed_quality, use_alpha)
             squared.save(output_file, format=_pil_format(parsed_format), **save_kwargs)
     except UnidentifiedImageError as exc:
         raise ValueError(f"Unsupported or corrupt image: {input_path}") from exc
@@ -315,6 +390,7 @@ def process_images(
     fit: str = "contain",
     padding: float = 0.0,
     preset: Optional[str] = None,
+    upscale: bool = True,
     recursive: bool = False,
     include: Optional[List[str]] = None,
     exclude: Optional[List[str]] = None,
@@ -369,6 +445,7 @@ def process_images(
                     fit=fit,
                     padding=padding,
                     preset=preset,
+                    upscale=upscale,
                 )
                 rows.append(
                     {
@@ -417,6 +494,7 @@ def process_images(
             fit=fit,
             padding=padding,
             preset=preset,
+            upscale=upscale,
         )
         rows.append(
             {"input": in_img_path, "output": str(out_file), "status": "converted", "message": ""}
@@ -447,6 +525,7 @@ def main(
         fit=kwargs.get("fit", "contain"),
         padding=kwargs.get("padding", 0.0),
         preset=kwargs.get("preset"),
+        upscale=kwargs.get("upscale", True),
         recursive=kwargs.get("recursive", False),
         include=kwargs.get("include"),
         exclude=kwargs.get("exclude"),
@@ -507,6 +586,11 @@ def cli() -> None:
         help="Apply common settings bundle (size/format/quality/fit/padding).",
     )
     parser.add_argument(
+        "--no_upscale",
+        action="store_true",
+        help="Keep original logo resolution when source is smaller than target.",
+    )
+    parser.add_argument(
         "--overwrite",
         action="store_true",
         help="Overwrite existing outputs in batch mode.",
@@ -551,6 +635,7 @@ def cli() -> None:
         fit=args.fit,
         padding=args.padding,
         preset=args.preset,
+        upscale=not args.no_upscale,
         recursive=args.recursive,
         include=args.include,
         exclude=args.exclude,
