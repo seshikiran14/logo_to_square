@@ -31,13 +31,13 @@ Before/After Showcase
 
 Input example:
 
-.. image:: docs/_static/showcase/before.png
+.. image:: docs/_static/showcase/before_tc22.png
    :alt: Sample input image before square conversion
    :width: 320
 
 Square output:
 
-.. image:: docs/_static/showcase/after_square.webp
+.. image:: docs/_static/showcase/after_tc22_square.webp
    :alt: Square output image after conversion
    :width: 320
 
